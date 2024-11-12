@@ -1,0 +1,161 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <curl/curl.h>
+
+#define HASH_SIZE 50000
+#define WORD_MAX 100
+#define URL "https://storage.googleapis.com/download.tensorflow.org/data/shakespeare.txt"
+
+// Structure to hold word frequency
+typedef struct WordFreq {
+    char *word;
+    int count;
+    struct WordFreq *next;
+} WordFreq;
+
+WordFreq *hashTable[HASH_SIZE];
+
+// Hash function
+unsigned int hash(const char *word) {
+    unsigned int hash = 0;
+    while (*word) {
+        hash = (hash << 5) + *word++;
+    }
+    return hash % HASH_SIZE;
+}
+
+// Insert or update word in hash table
+void insert(const char *word) {
+    unsigned int index = hash(word);
+    WordFreq *entry = hashTable[index];
+
+    while (entry) {
+        if (strcmp(entry->word, word) == 0) {
+            entry->count++;
+            return;
+        }
+        entry = entry->next;
+    }
+
+    WordFreq *newWord = (WordFreq *)malloc(sizeof(WordFreq));
+    newWord->word = strdup(word);
+    newWord->count = 1;
+    newWord->next = hashTable[index];
+    hashTable[index] = newWord;
+}
+
+// Callback function to write data from libcurl
+size_t write_data(void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    return fwrite(ptr, size, nmemb, stream);
+}
+
+// Download the Shakespeare dataset
+int download_data(const char *url, const char *filename) {
+    CURL *curl = curl_easy_init();
+    if (!curl) return -1;
+
+    FILE *file = fopen(filename, "wb");
+    if (!file) {
+        curl_easy_cleanup(curl);
+        return -1;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_data);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, file);
+
+    CURLcode res = curl_easy_perform(curl);
+    fclose(file);
+    curl_easy_cleanup(curl);
+
+    return res == CURLE_OK ? 0 : -1;
+}
+
+// Read words from file and insert into hash table
+void process_file(const char *filename) {
+    FILE *file = fopen(filename, "r");
+    if (!file) {
+        fprintf(stderr, "Could not open file.\n");
+        return;
+    }
+
+    char word[WORD_MAX];
+    int i = 0;
+    char c;
+    while ((c = fgetc(file)) != EOF) {
+        if (isalpha(c)) {
+            if (i < WORD_MAX - 1) {
+                word[i++] = tolower(c);
+            }
+        } else if (i > 0) {
+            word[i] = '\0';
+            insert(word);
+            i = 0;
+        }
+    }
+    fclose(file);
+}
+
+// Comparison function for sorting
+int compare(const void *a, const void *b) {
+    WordFreq *wordA = *(WordFreq **)a;
+    WordFreq *wordB = *(WordFreq **)b;
+    return wordB->count - wordA->count;
+}
+
+// Find and display the n most frequent words
+void findMostFrequentWords(int n) {
+    WordFreq *words[HASH_SIZE];
+    int count = 0;
+
+    for (int i = 0; i < HASH_SIZE; i++) {
+        WordFreq *entry = hashTable[i];
+        while (entry) {
+            words[count++] = entry;
+            entry = entry->next;
+        }
+    }
+
+    qsort(words, count, sizeof(WordFreq *), compare);
+
+    printf("Top %d most frequent words:\n", n);
+    for (int i = 0; i < n && i < count; i++) {
+        printf("%s: %d\n", words[i]->word, words[i]->count);
+    }
+}
+
+// Clean up allocated memory
+void cleanup() {
+    for (int i = 0; i < HASH_SIZE; i++) {
+        WordFreq *entry = hashTable[i];
+        while (entry) {
+            WordFreq *temp = entry;
+            entry = entry->next;
+            free(temp->word);
+            free(temp);
+        }
+    }
+}
+
+int main() {
+    const char *filename = "shakespeare.txt";
+
+    if (download_data(URL, filename) != 0) {
+        fprintf(stderr, "Failed to download the dataset.\n");
+        return 1;
+    }
+
+    process_file(filename);
+
+    int n;
+    printf("Enter the number of most frequent words to display: ");
+    scanf("%d", &n);
+
+    findMostFrequentWords(n);
+
+    cleanup();
+
+    return 0;
+}
